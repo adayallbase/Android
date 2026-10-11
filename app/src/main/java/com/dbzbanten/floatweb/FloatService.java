@@ -71,6 +71,8 @@ public class FloatService extends Service {
     private Button closeBtn;
 
     // Nav bar
+    private Button backBtn;
+    private Button forwardBtn;
     private Button reloadBtn;
     private EditText addressBar;
     private Button loadBtn;
@@ -178,6 +180,7 @@ public class FloatService extends Service {
             rebuildTabBar();
             updateActiveTabVisibility();
             updateAddressBarForTab();
+            updateNavButtons();
 
         } catch (Throwable t) {
             Toast.makeText(this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
@@ -192,11 +195,8 @@ public class FloatService extends Service {
         super.onDestroy();
     }
 
-    // ================== KEYBOARD FOCUS HELPERS ==================
+    // ================== KEYBOARD FOCUS ==================
 
-    /**
-     * Lepas FLAG_NOT_FOCUSABLE supaya window bisa terima keyboard.
-     */
     private void enableKeyboard() {
         if (lp == null) return;
         if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0) {
@@ -205,10 +205,6 @@ public class FloatService extends Service {
         }
     }
 
-    /**
-     * Pasang FLAG_NOT_FOCUSABLE + sembunyikan keyboard.
-     * Dipakai supaya back button app lain berfungsi kembali.
-     */
     private void disableKeyboard() {
         if (lp == null) return;
         if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0) {
@@ -270,6 +266,11 @@ public class FloatService extends Service {
         return activeTabIndex == TAB_HOME;
     }
 
+    private WebView getActiveWebView() {
+        Tab t = getActiveTab();
+        return t != null ? t.webView : null;
+    }
+
     private void updateAddressBarForTab() {
         if (isHomeTabActive()) {
             addressBar.setText(HOME_URL);
@@ -294,6 +295,24 @@ public class FloatService extends Service {
                 }
             }
         }
+    }
+
+    /** Update enable/disable back & forward button */
+    private void updateNavButtons() {
+        WebView wv = getActiveWebView();
+        if (wv == null) {
+            backBtn.setEnabled(false);
+            backBtn.setAlpha(0.4f);
+            forwardBtn.setEnabled(false);
+            forwardBtn.setAlpha(0.4f);
+            return;
+        }
+        boolean canBack = wv.canGoBack();
+        boolean canFwd = wv.canGoForward();
+        backBtn.setEnabled(canBack);
+        backBtn.setAlpha(canBack ? 1f : 0.4f);
+        forwardBtn.setEnabled(canFwd);
+        forwardBtn.setAlpha(canFwd ? 1f : 0.4f);
     }
 
     // ================== UI BUILD ==================
@@ -348,35 +367,48 @@ public class FloatService extends Service {
         LinearLayout navBar = new LinearLayout(this);
         navBar.setOrientation(LinearLayout.HORIZONTAL);
         navBar.setGravity(Gravity.CENTER_VERTICAL);
-        navBar.setPadding(dp(6), dp(4), dp(6), dp(4));
+        navBar.setPadding(dp(4), dp(4), dp(6), dp(4));
         navBar.setBackgroundColor(0xFF2A2A2E);
         LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
         container.addView(navBar, navLp);
 
+        // Back button
+        backBtn = makeNavBtn("◀");
+        navBar.addView(backBtn, new LinearLayout.LayoutParams(dp(34), dp(34)));
+
+        // Forward button
+        forwardBtn = makeNavBtn("▶");
+        LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        fLp.leftMargin = dp(2);
+        navBar.addView(forwardBtn, fLp);
+
+        // Reload
         reloadBtn = makeNavBtn("⟳");
-        navBar.addView(reloadBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+        rLp.leftMargin = dp(2);
+        navBar.addView(reloadBtn, rLp);
 
         addressBar = new EditText(this);
         addressBar.setHint("Cari atau ketik URL");
         addressBar.setHintTextColor(0xFF777777);
         addressBar.setTextColor(0xFFFFFFFF);
-        addressBar.setTextSize(12);
+        addressBar.setTextSize(11);
         addressBar.setSingleLine(true);
         addressBar.setImeOptions(EditorInfo.IME_ACTION_GO);
         addressBar.setBackgroundColor(0xFF1A1A1E);
-        addressBar.setPadding(dp(10), 0, dp(10), 0);
-        LinearLayout.LayoutParams addrLp = new LinearLayout.LayoutParams(0, dp(36), 1f);
+        addressBar.setPadding(dp(8), 0, dp(8), 0);
+        LinearLayout.LayoutParams addrLp = new LinearLayout.LayoutParams(0, dp(34), 1f);
         addrLp.leftMargin = dp(4);
         addrLp.rightMargin = dp(4);
         navBar.addView(addressBar, addrLp);
 
         loadBtn = makeBtn("GO", 0xFFFF9800);
         loadBtn.setTextColor(0xFF000000);
-        navBar.addView(loadBtn, new LinearLayout.LayoutParams(dp(40), dp(36)));
+        navBar.addView(loadBtn, new LinearLayout.LayoutParams(dp(38), dp(34)));
 
         autoBtn = makeBtn("10s", 0xFF333334);
-        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(48), dp(36));
+        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(46), dp(34));
         autoLp.leftMargin = dp(4);
         navBar.addView(autoBtn, autoLp);
 
@@ -436,29 +468,37 @@ public class FloatService extends Service {
 
         // ===== LISTENERS =====
 
-        // Address bar — enable keyboard saat tap
         addressBar.setOnTouchListener((v, e) -> {
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
                 enableKeyboard();
             }
             return false;
         });
-        addressBar.setOnFocusChangeListener((v, hasFocus) -> {
-            if (!hasFocus) {
-                // Cek apakah WebView masih butuh keyboard
-                WebView wv = getActiveWebView();
-                if (wv == null || !wv.hasFocus()) {
-                    // Jangan langsung disable, biarkan user tap tombol lain
-                }
+
+        // === BACK button ===
+        backBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            WebView wv = getActiveWebView();
+            if (wv != null && wv.canGoBack()) {
+                wv.goBack();
             }
         });
 
-        // Tombol header — disable keyboard saat tap
+        // === FORWARD button ===
+        forwardBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            WebView wv = getActiveWebView();
+            if (wv != null && wv.canGoForward()) {
+                wv.goForward();
+            }
+        });
+
+        // === RELOAD ===
         reloadBtn.setOnClickListener(v -> {
             disableKeyboard();
             stopAuto();
-            Tab t = getActiveTab();
-            if (t != null) t.webView.reload();
+            WebView wv = getActiveWebView();
+            if (wv != null) wv.reload();
         });
 
         loadBtn.setOnClickListener(v -> {
@@ -493,12 +533,6 @@ public class FloatService extends Service {
         });
 
         return frameRoot;
-    }
-
-    /** Ambil WebView dari tab yang aktif */
-    private WebView getActiveWebView() {
-        Tab t = getActiveTab();
-        return t != null ? t.webView : null;
     }
 
     private void doLoad() {
@@ -585,7 +619,7 @@ public class FloatService extends Service {
         Button b = new Button(this);
         b.setText(text);
         b.setTextColor(0xFFFFFFFF);
-        b.setTextSize(12);
+        b.setTextSize(13);
         b.setAllCaps(false);
         b.setPadding(0, 0, 0, 0);
         b.setMinWidth(0);
@@ -638,14 +672,12 @@ public class FloatService extends Service {
         wv.setWebViewClient(new TabWebViewClient());
         wv.setWebChromeClient(new TabWebChromeClient());
 
-        // === KEYBOARD FIX: enable keyboard saat WebView di-tap ===
         wv.setOnTouchListener((v, e) -> {
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
                 enableKeyboard();
-                // Request focus ke WebView
                 v.requestFocus();
             }
-            return false; // biar WebView handle touch sendiri
+            return false;
         });
 
         wv.setOnFocusChangeListener((v, hasFocus) -> {
@@ -668,6 +700,7 @@ public class FloatService extends Service {
         rebuildTabBar();
         updateActiveTabVisibility();
         updateAddressBarForTab();
+        updateNavButtons();
     }
 
     private void rebuildTabBar() {
@@ -766,6 +799,7 @@ public class FloatService extends Service {
                     addressBar.setText(url);
                 }
                 progressBar.setVisibility(View.GONE);
+                updateNavButtons();
             }
         }
     }
@@ -798,8 +832,8 @@ public class FloatService extends Service {
         if (autoRunnable == null) {
             autoRunnable = () -> {
                 if (autoRefresh) {
-                    Tab t = getActiveTab();
-                    if (t != null) t.webView.reload();
+                    WebView wv = getActiveWebView();
+                    if (wv != null) wv.reload();
                     scheduleAuto();
                 }
             };
@@ -958,27 +992,6 @@ public class FloatService extends Service {
                     return true;
             }
             return false;
-        }
-    }
-
-    static class FocusToggle implements View.OnTouchListener, View.OnFocusChangeListener {
-        private final FloatService s;
-        FocusToggle(FloatService service) { this.s = service; }
-
-        @Override
-        public boolean onTouch(View v, MotionEvent e) {
-            if (e.getAction() == MotionEvent.ACTION_DOWN) {
-                if (!v.isEnabled()) return true;
-                s.enableKeyboard();
-            }
-            return false;
-        }
-
-        @Override
-        public void onFocusChange(View v, boolean hasFocus) {
-            if (!hasFocus) {
-                // Biarkan — nanti tombol lain akan disable
-            }
         }
     }
 }
