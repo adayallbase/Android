@@ -1,43 +1,35 @@
-evaluationDependsOn(':server')
-
 apply plugin: 'com.android.application'
 
 android {
-    namespace 'org.client.scrcpy'
-    flavorDimensions = ["default"]
+    namespace 'com.dbzbanten.floatweb'
+    compileSdk 34
 
-    compileSdkVersion 31
     defaultConfig {
-        minSdkVersion 21
-        targetSdkVersion 31
-        versionCode 8
-        versionName "1.0.4"
-        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
-        setProperty("archivesBaseName", "scrcpy")
+        applicationId "com.dbzbanten.floatweb"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
     }
+
     buildTypes {
         release {
             minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
-    productFlavors {
-        scrcpy {
-            applicationId "org.client.scrcpy"
-        }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
-
-    tasks.whenTaskAdded { task ->
-        def buildType = project.hasProperty('buildType') ? project.buildType : 'Debug'
-
-        task.dependsOn ":server:assemble${buildType}"
-        task.dependsOn ":server:copyServer"
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
     }
 }
 
 dependencies {
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'com.android.support.test:runner:1.0.2'
-    androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
+    // Tidak ada dependency tambahan
 }
