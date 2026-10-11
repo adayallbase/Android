@@ -5,6 +5,8 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
@@ -57,6 +59,7 @@ public class FloatService extends Service {
 
     // Header
     private LinearLayout tabBar;
+    private Button pasteBtn;
     private Button minBtn;
     private Button defaultBtn;
     private Button closeBtn;
@@ -134,6 +137,7 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
+            // 2 tab default: Home + Browser
             addNewTabSilent(DEFAULT_URL);
             addNewTabSilent(BLANK_URL);
             switchTab(0);
@@ -181,14 +185,23 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, 1f);
         header.addView(tabBar, tabLp);
 
-        minBtn = makeBtn("−", 0xFF666666);
-        header.addView(minBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
+        // Tombol paste
+        pasteBtn = makeBtn("📋", 0xFF00796B);
+        header.addView(pasteBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
 
+        // Tombol minimize
+        minBtn = makeBtn("−", 0xFF666666);
+        LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(dp(34), dp(28));
+        mLp.leftMargin = dp(4);
+        header.addView(minBtn, mLp);
+
+        // Tombol D
         defaultBtn = makeBtn("D", 0xFFFF6600);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         dLp.leftMargin = dp(4);
         header.addView(defaultBtn, dLp);
 
+        // Tombol X
         closeBtn = makeBtn("X", 0xFFCC3333);
         LinearLayout.LayoutParams xLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         xLp.leftMargin = dp(4);
@@ -204,11 +217,9 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
         container.addView(navBar, navLp);
 
-        // Tombol reload
         reloadBtn = makeNavBtn("⟳");
         navBar.addView(reloadBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
 
-        // Address bar
         addressBar = new EditText(this);
         addressBar.setHint("Cari atau ketik URL");
         addressBar.setHintTextColor(0xFF777777);
@@ -223,11 +234,9 @@ public class FloatService extends Service {
         addrLp.rightMargin = dp(4);
         navBar.addView(addressBar, addrLp);
 
-        // Tombol search
         searchBtn = makeNavBtn("🔍");
         navBar.addView(searchBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
 
-        // Tombol auto
         autoBtn = makeBtn("10s", 0xFF333334);
         LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(48), dp(36));
         autoLp.leftMargin = dp(4);
@@ -294,7 +303,6 @@ public class FloatService extends Service {
             if (t != null) t.webView.reload();
         });
 
-        // Enter di address bar → load
         addressBar.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO
                     || actionId == EditorInfo.IME_ACTION_DONE) {
@@ -304,7 +312,6 @@ public class FloatService extends Service {
             return false;
         });
 
-        // Tombol search → load
         searchBtn.setOnClickListener(v -> doSearch());
 
         FocusToggle toggle = new FocusToggle(this);
@@ -312,6 +319,8 @@ public class FloatService extends Service {
         addressBar.setOnFocusChangeListener(toggle);
 
         autoBtn.setOnClickListener(v -> showIntervalDialog());
+
+        pasteBtn.setOnClickListener(v -> pasteFromClipboard());
 
         defaultBtn.setOnClickListener(v -> {
             Tab t = getActiveTab();
@@ -339,6 +348,28 @@ public class FloatService extends Service {
             Tab t = getActiveTab();
             if (t != null) t.webView.loadUrl(url);
         }
+    }
+
+    /** Paste dari clipboard ke address bar + langsung load */
+    private void pasteFromClipboard() {
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        ClipData clip = cm.getPrimaryClip();
+        if (clip != null && clip.getItemCount() > 0) {
+            CharSequence text = clip.getItemAt(0).getText();
+            if (text != null && !TextUtils.isEmpty(text)) {
+                String pasted = text.toString();
+                addressBar.setText(pasted);
+                Tab t = getActiveTab();
+                if (t != null) {
+                    String url = parseInput(pasted);
+                    if (url != null) t.webView.loadUrl(url);
+                }
+                Toast.makeText(this, "Pasted: " + pasted, Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+        Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show();
     }
 
     private Button makeBtn(String text, int color) {
@@ -400,25 +431,6 @@ public class FloatService extends Service {
         activeTabIndex = tabs.size() - 1;
     }
 
-    private void addNewTab(String url) {
-        if (tabs.size() >= MAX_TABS) {
-            Toast.makeText(this, "Maksimal " + MAX_TABS + " tab", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        WebView wv = createWebView();
-        Tab tab = new Tab(wv, url);
-        tabs.add(tab);
-        webViewContainer.addView(wv, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-
-        activeTabIndex = tabs.size() - 1;
-        wv.loadUrl(url);
-
-        rebuildTabBar();
-        updateActiveTabVisibility();
-    }
-
     private WebView createWebView() {
         WebView wv = new WebView(this);
         WebSettings ws = wv.getSettings();
@@ -452,34 +464,6 @@ public class FloatService extends Service {
         }
     }
 
-    private void closeTab(int index) {
-        if (index < 0 || index >= tabs.size()) return;
-
-        if (index == 0) {
-            Toast.makeText(this, "Tab Home tidak bisa ditutup", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (tabs.size() == 1) {
-            close();
-            stopSelf();
-            return;
-        }
-
-        Tab t = tabs.remove(index);
-        try {
-            t.webView.stopLoading();
-            t.webView.destroy();
-        } catch (Throwable ignored) {}
-        webViewContainer.removeView(t.webView);
-
-        if (activeTabIndex >= tabs.size()) activeTabIndex = tabs.size() - 1;
-        else if (activeTabIndex > index) activeTabIndex--;
-
-        rebuildTabBar();
-        updateActiveTabVisibility();
-    }
-
     private void rebuildTabBar() {
         tabBar.removeAllViews();
 
@@ -509,35 +493,6 @@ public class FloatService extends Service {
             tabBar.addView(btn, lp);
 
             btn.setOnClickListener(v -> switchTab(idx));
-
-            if (i != 0) {
-                btn.setOnLongClickListener(v -> {
-                    closeTab(idx);
-                    return true;
-                });
-            } else {
-                btn.setOnLongClickListener(v -> {
-                    Toast.makeText(this, "Tab Home tidak bisa ditutup", Toast.LENGTH_SHORT).show();
-                    return true;
-                });
-            }
-        }
-
-        if (tabs.size() < MAX_TABS) {
-            Button addBtn = new Button(this);
-            addBtn.setText("+");
-            addBtn.setTextSize(14);
-            addBtn.setAllCaps(false);
-            addBtn.setTextColor(0xFFFFFFFF);
-            addBtn.setPadding(0, 0, 0, 0);
-            addBtn.setMinWidth(0);
-            addBtn.setMinimumWidth(0);
-            GradientDrawable bg = new GradientDrawable();
-            bg.setColor(0xFF2E7D32);
-            bg.setCornerRadius(dp(6));
-            addBtn.setBackground(bg);
-            addBtn.setOnClickListener(v -> addNewTab(BLANK_URL));
-            tabBar.addView(addBtn, new LinearLayout.LayoutParams(dp(32), dp(28)));
         }
     }
 
@@ -618,18 +573,6 @@ public class FloatService extends Service {
             super.onProgressChanged(view, newProgress);
             progressBar.setProgress(newProgress);
             progressBar.setVisibility(newProgress < 100 ? View.VISIBLE : View.GONE);
-        }
-
-        @Override
-        public void onReceivedTitle(WebView view, String title) {
-            super.onReceivedTitle(view, title);
-            for (int i = 0; i < tabs.size(); i++) {
-                if (tabs.get(i).webView == view) {
-                    tabs.get(i).title = title;
-                    rebuildTabBar();
-                    break;
-                }
-            }
         }
     }
 
