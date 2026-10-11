@@ -5,12 +5,9 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -31,7 +28,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import java.net.URLEncoder;
@@ -44,11 +40,12 @@ public class FloatService extends Service {
     private static final String SEARCH_ENGINE = "https://www.google.com/search?q=";
     private static final String PREFS_NAME = "dbzfloat_prefs";
     private static final String KEY_LAST_URL = "last_url";
+    private static final String BLANK_URL = "about:blank";
 
     private static final int MIN_WIDTH_DP = 240;
     private static final int MIN_HEIGHT_DP = 360;
     private static final int BUBBLE_SIZE_DP = 60;
-    private static final int MAX_TABS = 5;
+    private static final int MAX_TABS = 2;
 
     // Window
     private WindowManager wm;
@@ -138,8 +135,15 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
-            // Buka tab pertama
-            addNewTab(loadSavedUrlString());
+            // === Buka 2 tab default ===
+            // Tab 1: Home (Google Script)
+            addNewTabSilent(DEFAULT_URL);
+            // Tab 2: Browser (blank)
+            addNewTabSilent(BLANK_URL);
+
+            // Aktifkan tab 1 (Home)
+            switchTab(0);
+
         } catch (Throwable t) {
             Toast.makeText(this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             stopSelf();
@@ -149,12 +153,7 @@ public class FloatService extends Service {
 
     @Override
     public void onDestroy() {
-        stopAuto();
         close();
-        for (Tab t : tabs) {
-            try { t.webView.destroy(); } catch (Throwable ignored) {}
-        }
-        tabs.clear();
         super.onDestroy();
     }
 
@@ -181,7 +180,7 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(40));
         container.addView(header, headerLp);
 
-        // Tab bar (scrollable-like)
+        // Tab bar
         tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -324,7 +323,6 @@ public class FloatService extends Service {
             return false;
         });
 
-        // Tap address bar → focusable
         FocusToggle toggle = new FocusToggle(this);
         addressBar.setOnTouchListener(toggle);
         addressBar.setOnFocusChangeListener(toggle);
@@ -339,7 +337,10 @@ public class FloatService extends Service {
             }
         });
 
-        closeBtn.setOnClickListener(v -> close());
+        closeBtn.setOnClickListener(v -> {
+            close();
+            stopSelf();
+        });
 
         return frameRoot;
     }
@@ -390,12 +391,43 @@ public class FloatService extends Service {
         return tabs.get(activeTabIndex);
     }
 
+    /**
+     * Tambah tab tanpa rebuild tab bar — khusus untuk setup awal.
+     */
+    private void addNewTabSilent(String url) {
+        if (tabs.size() >= MAX_TABS) return;
+
+        WebView wv = createWebView();
+        Tab tab = new Tab(wv, url);
+        tabs.add(tab);
+        webViewContainer.addView(wv, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        wv.loadUrl(url);
+
+        activeTabIndex = tabs.size() - 1;
+    }
+
     private void addNewTab(String url) {
         if (tabs.size() >= MAX_TABS) {
-            Toast.makeText(this, "Max " + MAX_TABS + " tab", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Maksimal " + MAX_TABS + " tab", Toast.LENGTH_SHORT).show();
             return;
         }
 
+        WebView wv = createWebView();
+        Tab tab = new Tab(wv, url);
+        tabs.add(tab);
+        webViewContainer.addView(wv, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        activeTabIndex = tabs.size() - 1;
+        wv.loadUrl(url);
+
+        rebuildTabBar();
+        updateActiveTabVisibility();
+        updateNavButtons();
+    }
+
+    private WebView createWebView() {
         WebView wv = new WebView(this);
         WebSettings ws = wv.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -408,19 +440,7 @@ public class FloatService extends Service {
         wv.setBackgroundColor(0xFF000000);
         wv.setWebViewClient(new TabWebViewClient());
         wv.setWebChromeClient(new TabWebChromeClient());
-
-        Tab tab = new Tab(wv, url);
-        tabs.add(tab);
-
-        webViewContainer.addView(wv, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-
-        activeTabIndex = tabs.size() - 1;
-        wv.loadUrl(url);
-
-        rebuildTabBar();
-        updateActiveTabVisibility();
-        updateNavButtons();
+        return wv;
     }
 
     private void switchTab(int index) {
@@ -431,20 +451,38 @@ public class FloatService extends Service {
         updateNavButtons();
         Tab t = getActiveTab();
         if (t != null) {
-            addressBar.setText(t.webView.getUrl() != null ? t.webView.getUrl() : t.url);
+            String url = t.webView.getUrl();
+            if (url == null || url.equals(BLANK_URL)) {
+                addressBar.setText("");
+                addressBar.setHint("Cari atau ketik URL");
+            } else {
+                addressBar.setText(url);
+            }
         }
     }
 
     private void closeTab(int index) {
         if (index < 0 || index >= tabs.size()) return;
+
+        // Tab 1 = Home, tidak bisa ditutup
+        if (index == 0) {
+            Toast.makeText(this, "Tab Home tidak bisa ditutup", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // Kalau cuma 1 tab (harusnya gak mungkin karena tab 0 gak bisa ditutup),
+        // tutup service aja
         if (tabs.size() == 1) {
-            // Tab terakhir → tutup window
             close();
+            stopSelf();
             return;
         }
 
         Tab t = tabs.remove(index);
-        try { t.webView.destroy(); } catch (Throwable ignored) {}
+        try {
+            t.webView.stopLoading();
+            t.webView.destroy();
+        } catch (Throwable ignored) {}
         webViewContainer.removeView(t.webView);
 
         if (activeTabIndex >= tabs.size()) activeTabIndex = tabs.size() - 1;
@@ -457,10 +495,13 @@ public class FloatService extends Service {
 
     private void rebuildTabBar() {
         tabBar.removeAllViews();
+
+        // Tab 1 (Home) — fixed, tidak bisa di-close
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
             Button btn = new Button(this);
-            btn.setText(String.valueOf(i + 1));
+            // Tab 1 tampil "H" (Home), tab lain tampil angka
+            btn.setText(i == 0 ? "H" : String.valueOf(i + 1));
             btn.setTextSize(11);
             btn.setAllCaps(false);
             btn.setPadding(0, 0, 0, 0);
@@ -468,22 +509,37 @@ public class FloatService extends Service {
             btn.setMinimumWidth(0);
 
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(idx == activeTabIndex ? 0xFFFF9800 : 0xFF444444);
+            if (idx == activeTabIndex) {
+                bg.setColor(0xFFFF9800);
+                btn.setTextColor(0xFF000000);
+            } else {
+                bg.setColor(i == 0 ? 0xFF2E7D32 : 0xFF444444); // tab home hijau
+                btn.setTextColor(0xFFFFFFFF);
+            }
             bg.setCornerRadius(dp(6));
             btn.setBackground(bg);
-            btn.setTextColor(idx == activeTabIndex ? 0xFF000000 : 0xFFFFFFFF);
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(32), dp(28));
             lp.rightMargin = dp(3);
             tabBar.addView(btn, lp);
 
             btn.setOnClickListener(v -> switchTab(idx));
-            btn.setOnLongClickListener(v -> {
-                closeTab(idx);
-                return true;
-            });
+
+            // Long-press untuk close — hanya tab selain tab 0
+            if (i != 0) {
+                btn.setOnLongClickListener(v -> {
+                    closeTab(idx);
+                    return true;
+                });
+            } else {
+                btn.setOnLongClickListener(v -> {
+                    Toast.makeText(this, "Tab Home tidak bisa ditutup", Toast.LENGTH_SHORT).show();
+                    return true;
+                });
+            }
         }
 
+        // Tombol "+" untuk tambah tab (muncul kalau tab < MAX_TABS)
         if (tabs.size() < MAX_TABS) {
             Button addBtn = new Button(this);
             addBtn.setText("+");
@@ -497,7 +553,7 @@ public class FloatService extends Service {
             bg.setColor(0xFF2E7D32);
             bg.setCornerRadius(dp(6));
             addBtn.setBackground(bg);
-            addBtn.setOnClickListener(v -> addNewTab(DEFAULT_URL));
+            addBtn.setOnClickListener(v -> addNewTab(BLANK_URL));
             tabBar.addView(addBtn, new LinearLayout.LayoutParams(dp(32), dp(28)));
         }
     }
@@ -517,10 +573,6 @@ public class FloatService extends Service {
         forwardBtn.setAlpha(t.webView.canGoForward() ? 1f : 0.4f);
     }
 
-    private void updateTabButton() {
-        rebuildTabBar();
-    }
-
     // ================== URL PARSER ==================
 
     private String parseInput(String input) {
@@ -532,12 +584,10 @@ public class FloatService extends Service {
             return input;
         }
 
-        // Domain-ish: ada titik dan tanpa spasi
         if (input.contains(".") && !input.contains(" ")) {
             return "https://" + input;
         }
 
-        // Search
         try {
             return SEARCH_ENGINE + URLEncoder.encode(input, "UTF-8");
         } catch (Exception e) {
@@ -550,7 +600,6 @@ public class FloatService extends Service {
     private class TabWebViewClient extends WebViewClient {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
-            // Handle non-http
             if (url.startsWith("http://") || url.startsWith("https://")) {
                 return false;
             }
@@ -567,7 +616,9 @@ public class FloatService extends Service {
             super.onPageStarted(view, url, favicon);
             Tab t = getActiveTab();
             if (t != null && t.webView == view) {
-                addressBar.setText(url);
+                if (!BLANK_URL.equals(url)) {
+                    addressBar.setText(url);
+                }
                 progressBar.setVisibility(View.VISIBLE);
             }
         }
@@ -577,7 +628,7 @@ public class FloatService extends Service {
             super.onPageFinished(view, url);
             Tab t = getActiveTab();
             if (t != null && t.webView == view) {
-                if (!TextUtils.isEmpty(url)) {
+                if (!TextUtils.isEmpty(url) && !BLANK_URL.equals(url)) {
                     t.url = url;
                     addressBar.setText(url);
                     Prefs.set(FloatService.this, url);
@@ -602,7 +653,7 @@ public class FloatService extends Service {
             for (int i = 0; i < tabs.size(); i++) {
                 if (tabs.get(i).webView == view) {
                     tabs.get(i).title = title;
-                    updateTabButton();
+                    rebuildTabBar();
                     break;
                 }
             }
@@ -674,6 +725,16 @@ public class FloatService extends Service {
             try { wm.removeView(root); } catch (Throwable ignored) {}
             root = null;
         }
+        // Destroy semua tab + clear list
+        for (Tab t : tabs) {
+            try {
+                t.webView.stopLoading();
+                t.webView.destroy();
+            } catch (Throwable ignored) {}
+        }
+        tabs.clear();
+        activeTabIndex = 0;
+        webViewContainer = null;
         try { stopForeground(true); } catch (Throwable ignored) {}
     }
 
