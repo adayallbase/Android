@@ -18,10 +18,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // === Cek kalau dibuka dari klik link / share ===
         pendingUrl = extractUrl(getIntent());
 
-        // === Minta izin overlay kalau perlu ===
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 Intent intent = new Intent(
@@ -42,7 +40,6 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
 
-        // === Handle kalau app sudah jalan & dapat link baru ===
         String url = extractUrl(intent);
         if (url != null) {
             Intent serviceIntent = new Intent(this, FloatService.class);
@@ -64,11 +61,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Ambil URL dari intent:
-     * - ACTION_VIEW → data URI
-     * - ACTION_SEND → EXTRA_TEXT
-     */
     private String extractUrl(Intent intent) {
         if (intent == null) return null;
 
@@ -84,12 +76,10 @@ public class MainActivity extends Activity {
             String text = intent.getStringExtra(Intent.EXTRA_TEXT);
             if (text != null) {
                 text = text.trim();
-                // Cari URL dalam text (misal "Cek ini: https://...")
                 int start = text.indexOf("http://");
                 if (start < 0) start = text.indexOf("https://");
                 if (start >= 0) {
                     String url = text.substring(start);
-                    // Ambil sampai spasi pertama
                     int end = url.indexOf(' ');
                     if (end > 0) url = url.substring(0, end);
                     return url;

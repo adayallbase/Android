@@ -8,6 +8,7 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
@@ -97,6 +98,9 @@ public class FloatService extends Service {
     private int ow, oh;
     private boolean booting = true;
 
+    // Flag: kalau true, service tidak boleh restart
+    private static volatile boolean killing = false;
+
     // ================== LIFECYCLE ==================
 
     @Override
@@ -127,6 +131,12 @@ public class FloatService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
+        // Kalau sedang proses kill → jangan jalankan apapun
+        if (killing) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
         String urlFromIntent = null;
         if (intent != null) {
             urlFromIntent = intent.getStringExtra("url");
@@ -136,7 +146,7 @@ public class FloatService extends Service {
             if (!TextUtils.isEmpty(urlFromIntent)) {
                 loadUrlInBrowserTab(urlFromIntent);
             }
-            return START_STICKY;
+            return START_NOT_STICKY;
         }
 
         try {
@@ -190,7 +200,7 @@ public class FloatService extends Service {
             Toast.makeText(this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
             stopSelf();
         }
-        return START_STICKY;
+        return START_NOT_STICKY; // ✅ Jangan restart kalau service mati
     }
 
     @Override
@@ -199,12 +209,48 @@ public class FloatService extends Service {
         super.onDestroy();
     }
 
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        // Kalau user swipe app dari recent → kill total
+        killing = true;
+        super.onTaskRemoved(rootIntent);
+        killApp();
+    }
+
     // ================== KILL APP TOTAL ==================
 
     private void killApp() {
-        try { close(); } catch (Throwable ignored) {}
-        try { stopSelf(); } catch (Throwable ignored) {}
+        killing = true;
 
+        // 1. Stop auto-refresh
+        try { stopAuto(); } catch (Throwable ignored) {}
+
+        // 2. Hapus window dari layar
+        if (root != null && wm != null) {
+            try { wm.removeView(root); } catch (Throwable ignored) {}
+            root = null;
+        }
+
+        // 3. Destroy semua WebView
+        for (Tab t : tabs) {
+            try {
+                t.webView.stopLoading();
+                t.webView.destroy();
+            } catch (Throwable ignored) {}
+        }
+        tabs.clear();
+        activeTabIndex = 0;
+        webViewContainer = null;
+
+        // 4. STOP FOREGROUND — WAJIB supaya service bisa mati
+        try { stopForeground(true); } catch (Throwable ignored) {}
+        try { stopForeground(STOP_FOREGROUND_REMOVE); } catch (Throwable ignored) {}
+
+        // 5. Stop service
+        try { stopSelf(); } catch (Throwable ignored) {}
+        try { stopSelfResult(1); } catch (Throwable ignored) {}
+
+        // 6. Kill background processes
         try {
             ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
             if (am != null) {
@@ -212,12 +258,11 @@ public class FloatService extends Service {
             }
         } catch (Throwable ignored) {}
 
-        new Handler().postDelayed(() -> {
-            try {
-                android.os.Process.killProcess(android.os.Process.myPid());
-            } catch (Throwable ignored) {}
-            System.exit(0);
-        }, 300);
+        // 7. Kill process SEKARANG (tanpa delay)
+        try {
+            android.os.Process.killProcess(android.os.Process.myPid());
+        } catch (Throwable ignored) {}
+        System.exit(0);
     }
 
     // ================== CLEAR DATA (KECUALI COOKIES) ==================
@@ -607,11 +652,14 @@ public class FloatService extends Service {
             toggleBubble();
         });
 
-        // === CLOSE BUTTON — Langsung clear + kill ===
+        // === CLOSE BUTTON — Langsung clear cache + kill total ===
         closeBtn.setOnClickListener(v -> {
             disableKeyboard();
-            Toast.makeText(this, "Menutup aplikasi...", Toast.LENGTH_SHORT).show();
+
+            // Clear cache dulu (cookies tetap)
             clearBrowsingDataKeepCookies();
+
+            // Kill app
             killApp();
         });
 
