@@ -85,6 +85,9 @@ public class FloatService extends Service {
 
     private int ow, oh;
 
+    // Flag: kalau true, jangan save last tab (untuk startup)
+    private boolean booting = true;
+
     // ================== LIFECYCLE ==================
 
     @Override
@@ -115,13 +118,12 @@ public class FloatService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
 
-        // URL dari intent (klik link dari app lain)
         String urlFromIntent = null;
         if (intent != null) {
             urlFromIntent = intent.getStringExtra("url");
         }
 
-        // Kalau service sudah jalan → langsung load URL baru
+        // Kalau service sudah jalan → load URL baru ke tab browser
         if (root != null) {
             if (!TextUtils.isEmpty(urlFromIntent)) {
                 loadUrlInBrowserTab(urlFromIntent);
@@ -151,26 +153,44 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
-            // === Tab 1: Home (Google Script) — selalu sama ===
+            // === Tab 1: Home (Google Script) ===
             addNewTabSilent(DEFAULT_URL);
 
-            // === Tab 2: Browser — load URL terakhir dari Prefs ===
+            // === Tab 2: Browser (URL terakhir / blank) ===
             String lastUrl = loadSavedUrlFromPrefs();
             if (TextUtils.isEmpty(lastUrl)) {
-                // Belum ada URL tersimpan → blank
                 addNewTabSilent(BLANK_URL);
             } else {
-                // Ada URL tersimpan → load
                 addNewTabSilent(lastUrl);
             }
 
-            // === Kalau ada URL dari intent → load di tab 2 ===
+            // === Restore tab terakhir / handle intent ===
             if (!TextUtils.isEmpty(urlFromIntent)) {
+                // Klik link dari app lain → tab 2 + aktif
                 tabs.get(1).webView.loadUrl(autofixUrl(urlFromIntent));
-                switchTab(1);
+                activeTabIndex = 1;
             } else {
-                // Aktifkan tab 1 (Home) kalau buka normal
-                switchTab(0);
+                // Restore tab terakhir
+                int lastTab = Prefs.getLastTab(this);
+                if (lastTab < 0 || lastTab >= tabs.size()) lastTab = 0;
+                activeTabIndex = lastTab;
+            }
+
+            // Sekarang boot selesai → mulai boleh save
+            booting = false;
+
+            // Update UI
+            rebuildTabBar();
+            updateActiveTabVisibility();
+            Tab t = getActiveTab();
+            if (t != null) {
+                String url = t.webView.getUrl();
+                if (url == null || url.equals(BLANK_URL)) {
+                    addressBar.setText("");
+                    addressBar.setHint("Cari atau ketik URL");
+                } else {
+                    addressBar.setText(url);
+                }
             }
 
         } catch (Throwable t) {
@@ -187,24 +207,18 @@ public class FloatService extends Service {
     }
 
     /**
-     * Ambil URL terakhir dari SharedPreferences.
-     * Return "" kalau kosong.
+     * Ambil URL terakhir dari Prefs.
+     * Skip URL Google Script dan blank.
      */
     private String loadSavedUrlFromPrefs() {
         SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         String url = sp.getString(KEY_LAST_URL, "");
         if (TextUtils.isEmpty(url)) return "";
-
-        // Jangan return URL Google Script (karena itu home)
         if (DEFAULT_URL.equals(url)) return "";
         if (BLANK_URL.equals(url)) return "";
-
         return url;
     }
 
-    /**
-     * Load URL ke tab browser (tab 2), switch ke tab itu, expand kalau perlu.
-     */
     private void loadUrlInBrowserTab(String url) {
         if (tabs.size() < 2) return;
 
@@ -217,9 +231,6 @@ public class FloatService extends Service {
         } catch (Throwable ignored) {}
     }
 
-    /**
-     * Auto-fix URL: tambah https:// kalau perlu, atau search Google.
-     */
     private String autofixUrl(String url) {
         if (url == null) return null;
         url = url.trim();
@@ -315,7 +326,6 @@ public class FloatService extends Service {
         addrLp.rightMargin = dp(4);
         navBar.addView(addressBar, addrLp);
 
-        // Tombol LOAD (text, lebih jelas dari icon)
         loadBtn = makeBtn("GO", 0xFFFF9800);
         loadBtn.setTextColor(0xFF000000);
         navBar.addView(loadBtn, new LinearLayout.LayoutParams(dp(40), dp(36)));
@@ -423,7 +433,6 @@ public class FloatService extends Service {
         return frameRoot;
     }
 
-    /** Load URL dari address bar + SAVE ke Prefs */
     private void doLoad() {
         String input = addressBar.getText().toString();
         String url = autofixUrl(input);
@@ -431,7 +440,6 @@ public class FloatService extends Service {
             Tab t = getActiveTab();
             if (t != null) {
                 t.webView.loadUrl(url);
-                // Simpan langsung
                 if (!BLANK_URL.equals(url) && !DEFAULT_URL.equals(url)) {
                     Prefs.set(FloatService.this, url);
                 }
@@ -439,7 +447,6 @@ public class FloatService extends Service {
         }
     }
 
-    /** Paste dari clipboard ke address bar + load + save */
     private void pasteFromClipboard() {
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (cm == null) return;
@@ -544,6 +551,12 @@ public class FloatService extends Service {
     private void switchTab(int index) {
         if (index < 0 || index >= tabs.size()) return;
         activeTabIndex = index;
+
+        // Simpan tab terakhir (kecuali sedang boot)
+        if (!booting) {
+            Prefs.setLastTab(this, index);
+        }
+
         rebuildTabBar();
         updateActiveTabVisibility();
         Tab t = getActiveTab();
@@ -615,7 +628,6 @@ public class FloatService extends Service {
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
             super.onPageStarted(view, url, favicon);
-            // Hanya update UI kalau tab ini aktif
             Tab active = getActiveTab();
             if (active != null && active.webView == view) {
                 if (!BLANK_URL.equals(url)) {
@@ -629,7 +641,7 @@ public class FloatService extends Service {
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
 
-            // Cari tab yang match (view mana pun)
+            // Cari tab yang match view
             Tab found = null;
             for (Tab t : tabs) {
                 if (t.webView == view) {
