@@ -6,7 +6,6 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -63,10 +62,9 @@ public class FloatService extends Service {
     private Button closeBtn;
 
     // Nav bar
-    private Button backBtn;
-    private Button forwardBtn;
     private Button reloadBtn;
     private EditText addressBar;
+    private Button searchBtn;
     private Button autoBtn;
     private ProgressBar progressBar;
 
@@ -136,13 +134,8 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
-            // === Buka 2 tab default ===
-            // Tab 1: Home (Google Script)
             addNewTabSilent(DEFAULT_URL);
-            // Tab 2: Browser (blank)
             addNewTabSilent(BLANK_URL);
-
-            // Aktifkan tab 1 (Home)
             switchTab(0);
 
         } catch (Throwable t) {
@@ -181,7 +174,6 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(40));
         container.addView(header, headerLp);
 
-        // Tab bar
         tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -189,17 +181,14 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, 1f);
         header.addView(tabBar, tabLp);
 
-        // Tombol minimize
         minBtn = makeBtn("−", 0xFF666666);
         header.addView(minBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
 
-        // Tombol D
         defaultBtn = makeBtn("D", 0xFFFF6600);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         dLp.leftMargin = dp(4);
         header.addView(defaultBtn, dLp);
 
-        // Tombol X
         closeBtn = makeBtn("X", 0xFFCC3333);
         LinearLayout.LayoutParams xLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         xLp.leftMargin = dp(4);
@@ -209,25 +198,17 @@ public class FloatService extends Service {
         LinearLayout navBar = new LinearLayout(this);
         navBar.setOrientation(LinearLayout.HORIZONTAL);
         navBar.setGravity(Gravity.CENTER_VERTICAL);
-        navBar.setPadding(dp(4), dp(4), dp(6), dp(4));
+        navBar.setPadding(dp(6), dp(4), dp(6), dp(4));
         navBar.setBackgroundColor(0xFF2A2A2E);
         LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
         container.addView(navBar, navLp);
 
-        backBtn = makeNavBtn("◀");
-        navBar.addView(backBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
-
-        forwardBtn = makeNavBtn("▶");
-        LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(dp(36), dp(36));
-        fLp.leftMargin = dp(2);
-        navBar.addView(forwardBtn, fLp);
-
+        // Tombol reload
         reloadBtn = makeNavBtn("⟳");
-        LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(dp(36), dp(36));
-        rLp.leftMargin = dp(2);
-        navBar.addView(reloadBtn, rLp);
+        navBar.addView(reloadBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
 
+        // Address bar
         addressBar = new EditText(this);
         addressBar.setHint("Cari atau ketik URL");
         addressBar.setHintTextColor(0xFF777777);
@@ -242,8 +223,15 @@ public class FloatService extends Service {
         addrLp.rightMargin = dp(4);
         navBar.addView(addressBar, addrLp);
 
+        // Tombol search
+        searchBtn = makeNavBtn("🔍");
+        navBar.addView(searchBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
+
+        // Tombol auto
         autoBtn = makeBtn("10s", 0xFF333334);
-        navBar.addView(autoBtn, new LinearLayout.LayoutParams(dp(48), dp(36)));
+        LinearLayout.LayoutParams autoLp = new LinearLayout.LayoutParams(dp(48), dp(36));
+        autoLp.leftMargin = dp(4);
+        navBar.addView(autoBtn, autoLp);
 
         // === PROGRESS BAR ===
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -300,35 +288,24 @@ public class FloatService extends Service {
         bubbleBtn.setOnTouchListener(new BubbleListener(this));
 
         // ===== LISTENERS =====
-        backBtn.setOnClickListener(v -> {
-            Tab t = getActiveTab();
-            if (t != null && t.webView.canGoBack()) t.webView.goBack();
-        });
-
-        forwardBtn.setOnClickListener(v -> {
-            Tab t = getActiveTab();
-            if (t != null && t.webView.canGoForward()) t.webView.goForward();
-        });
-
         reloadBtn.setOnClickListener(v -> {
             stopAuto();
             Tab t = getActiveTab();
             if (t != null) t.webView.reload();
         });
 
+        // Enter di address bar → load
         addressBar.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_GO
                     || actionId == EditorInfo.IME_ACTION_DONE) {
-                String input = addressBar.getText().toString();
-                String url = parseInput(input);
-                if (url != null) {
-                    Tab t = getActiveTab();
-                    if (t != null) t.webView.loadUrl(url);
-                }
+                doSearch();
                 return true;
             }
             return false;
         });
+
+        // Tombol search → load
+        searchBtn.setOnClickListener(v -> doSearch());
 
         FocusToggle toggle = new FocusToggle(this);
         addressBar.setOnTouchListener(toggle);
@@ -352,6 +329,16 @@ public class FloatService extends Service {
         });
 
         return frameRoot;
+    }
+
+    /** Load URL dari address bar */
+    private void doSearch() {
+        String input = addressBar.getText().toString();
+        String url = parseInput(input);
+        if (url != null) {
+            Tab t = getActiveTab();
+            if (t != null) t.webView.loadUrl(url);
+        }
     }
 
     private Button makeBtn(String text, int color) {
@@ -400,9 +387,6 @@ public class FloatService extends Service {
         return tabs.get(activeTabIndex);
     }
 
-    /**
-     * Tambah tab tanpa rebuild tab bar — khusus untuk setup awal.
-     */
     private void addNewTabSilent(String url) {
         if (tabs.size() >= MAX_TABS) return;
 
@@ -433,7 +417,6 @@ public class FloatService extends Service {
 
         rebuildTabBar();
         updateActiveTabVisibility();
-        updateNavButtons();
     }
 
     private WebView createWebView() {
@@ -457,7 +440,6 @@ public class FloatService extends Service {
         activeTabIndex = index;
         rebuildTabBar();
         updateActiveTabVisibility();
-        updateNavButtons();
         Tab t = getActiveTab();
         if (t != null) {
             String url = t.webView.getUrl();
@@ -473,14 +455,11 @@ public class FloatService extends Service {
     private void closeTab(int index) {
         if (index < 0 || index >= tabs.size()) return;
 
-        // Tab 1 = Home, tidak bisa ditutup
         if (index == 0) {
             Toast.makeText(this, "Tab Home tidak bisa ditutup", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // Kalau cuma 1 tab (harusnya gak mungkin karena tab 0 gak bisa ditutup),
-        // tutup service aja
         if (tabs.size() == 1) {
             close();
             stopSelf();
@@ -499,17 +478,14 @@ public class FloatService extends Service {
 
         rebuildTabBar();
         updateActiveTabVisibility();
-        updateNavButtons();
     }
 
     private void rebuildTabBar() {
         tabBar.removeAllViews();
 
-        // Tab 1 (Home) — fixed, tidak bisa di-close
         for (int i = 0; i < tabs.size(); i++) {
             final int idx = i;
             Button btn = new Button(this);
-            // Tab 1 tampil "H" (Home), tab lain tampil angka
             btn.setText(i == 0 ? "H" : String.valueOf(i + 1));
             btn.setTextSize(11);
             btn.setAllCaps(false);
@@ -522,7 +498,7 @@ public class FloatService extends Service {
                 bg.setColor(0xFFFF9800);
                 btn.setTextColor(0xFF000000);
             } else {
-                bg.setColor(i == 0 ? 0xFF2E7D32 : 0xFF444444); // tab home hijau
+                bg.setColor(i == 0 ? 0xFF2E7D32 : 0xFF444444);
                 btn.setTextColor(0xFFFFFFFF);
             }
             bg.setCornerRadius(dp(6));
@@ -534,7 +510,6 @@ public class FloatService extends Service {
 
             btn.setOnClickListener(v -> switchTab(idx));
 
-            // Long-press untuk close — hanya tab selain tab 0
             if (i != 0) {
                 btn.setOnLongClickListener(v -> {
                     closeTab(idx);
@@ -548,7 +523,6 @@ public class FloatService extends Service {
             }
         }
 
-        // Tombol "+" untuk tambah tab (muncul kalau tab < MAX_TABS)
         if (tabs.size() < MAX_TABS) {
             Button addBtn = new Button(this);
             addBtn.setText("+");
@@ -571,15 +545,6 @@ public class FloatService extends Service {
         for (int i = 0; i < tabs.size(); i++) {
             tabs.get(i).webView.setVisibility(i == activeTabIndex ? View.VISIBLE : View.GONE);
         }
-    }
-
-    private void updateNavButtons() {
-        Tab t = getActiveTab();
-        if (t == null) return;
-        backBtn.setEnabled(t.webView.canGoBack());
-        backBtn.setAlpha(t.webView.canGoBack() ? 1f : 0.4f);
-        forwardBtn.setEnabled(t.webView.canGoForward());
-        forwardBtn.setAlpha(t.webView.canGoForward() ? 1f : 0.4f);
     }
 
     // ================== URL PARSER ==================
@@ -643,7 +608,6 @@ public class FloatService extends Service {
                     Prefs.set(FloatService.this, url);
                 }
                 progressBar.setVisibility(View.GONE);
-                updateNavButtons();
             }
         }
     }
@@ -670,12 +634,6 @@ public class FloatService extends Service {
     }
 
     // ================== AUTO REFRESH ==================
-
-    private String loadSavedUrlString() {
-        SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        String url = sp.getString(KEY_LAST_URL, "");
-        return TextUtils.isEmpty(url) ? DEFAULT_URL : url;
-    }
 
     public void applyInterval(int seconds) {
         autoInterval = seconds;
@@ -734,7 +692,6 @@ public class FloatService extends Service {
             try { wm.removeView(root); } catch (Throwable ignored) {}
             root = null;
         }
-        // Destroy semua tab + clear list
         for (Tab t : tabs) {
             try {
                 t.webView.stopLoading();
