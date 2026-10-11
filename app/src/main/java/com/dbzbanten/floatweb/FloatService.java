@@ -1,5 +1,6 @@
 package com.dbzbanten.floatweb;
 
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -22,10 +23,12 @@ import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebViewDatabase;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -33,6 +36,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import java.io.File;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 
@@ -195,6 +199,90 @@ public class FloatService extends Service {
         super.onDestroy();
     }
 
+    // ================== KILL APP TOTAL ==================
+
+    private void killApp() {
+        try { close(); } catch (Throwable ignored) {}
+        try { stopSelf(); } catch (Throwable ignored) {}
+
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am != null) {
+                am.killBackgroundProcesses(getPackageName());
+            }
+        } catch (Throwable ignored) {}
+
+        new Handler().postDelayed(() -> {
+            try {
+                android.os.Process.killProcess(android.os.Process.myPid());
+            } catch (Throwable ignored) {}
+            System.exit(0);
+        }, 300);
+    }
+
+    // ================== CLEAR DATA (KECUALI COOKIES) ==================
+
+    private void clearBrowsingDataKeepCookies() {
+        try {
+            for (Tab t : tabs) {
+                try {
+                    t.webView.clearCache(true);
+                    t.webView.clearHistory();
+                    t.webView.clearFormData();
+                    t.webView.clearSslPreferences();
+                    t.webView.clearMatches();
+                } catch (Throwable ignored) {}
+            }
+
+            try {
+                WebViewDatabase.getInstance(this).clearFormData();
+                WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword();
+            } catch (Throwable ignored) {}
+
+            try {
+                File cacheDir = getCacheDir();
+                if (cacheDir != null && cacheDir.isDirectory()) {
+                    File[] files = cacheDir.listFiles();
+                    if (files != null) {
+                        for (File f : files) {
+                            deleteRecursive(f);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            try {
+                deleteDatabase("webview.db");
+                deleteDatabase("webviewCache.db");
+            } catch (Throwable ignored) {}
+
+            Prefs.set(this, "");
+            Prefs.setLastTab(this, 0);
+
+            try {
+                CookieManager.getInstance().flush();
+            } catch (Throwable ignored) {}
+
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+    }
+
+    private void deleteRecursive(File fileOrDir) {
+        if (fileOrDir == null) return;
+        if (fileOrDir.isDirectory()) {
+            File[] children = fileOrDir.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        try {
+            fileOrDir.delete();
+        } catch (Throwable ignored) {}
+    }
+
     // ================== KEYBOARD FOCUS ==================
 
     private void enableKeyboard() {
@@ -297,7 +385,6 @@ public class FloatService extends Service {
         }
     }
 
-    /** Update enable/disable back & forward button */
     private void updateNavButtons() {
         WebView wv = getActiveWebView();
         if (wv == null) {
@@ -373,17 +460,14 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
         container.addView(navBar, navLp);
 
-        // Back button
         backBtn = makeNavBtn("◀");
         navBar.addView(backBtn, new LinearLayout.LayoutParams(dp(34), dp(34)));
 
-        // Forward button
         forwardBtn = makeNavBtn("▶");
         LinearLayout.LayoutParams fLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         fLp.leftMargin = dp(2);
         navBar.addView(forwardBtn, fLp);
 
-        // Reload
         reloadBtn = makeNavBtn("⟳");
         LinearLayout.LayoutParams rLp = new LinearLayout.LayoutParams(dp(34), dp(34));
         rLp.leftMargin = dp(2);
@@ -475,7 +559,6 @@ public class FloatService extends Service {
             return false;
         });
 
-        // === BACK button ===
         backBtn.setOnClickListener(v -> {
             disableKeyboard();
             WebView wv = getActiveWebView();
@@ -484,7 +567,6 @@ public class FloatService extends Service {
             }
         });
 
-        // === FORWARD button ===
         forwardBtn.setOnClickListener(v -> {
             disableKeyboard();
             WebView wv = getActiveWebView();
@@ -493,7 +575,6 @@ public class FloatService extends Service {
             }
         });
 
-        // === RELOAD ===
         reloadBtn.setOnClickListener(v -> {
             disableKeyboard();
             stopAuto();
@@ -526,10 +607,12 @@ public class FloatService extends Service {
             toggleBubble();
         });
 
+        // === CLOSE BUTTON — Langsung clear + kill ===
         closeBtn.setOnClickListener(v -> {
             disableKeyboard();
-            close();
-            stopSelf();
+            Toast.makeText(this, "Menutup aplikasi...", Toast.LENGTH_SHORT).show();
+            clearBrowsingDataKeepCookies();
+            killApp();
         });
 
         return frameRoot;
