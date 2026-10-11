@@ -113,7 +113,20 @@ public class FloatService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (root != null) return START_STICKY;
+
+        // === Cek URL dari intent (klik link dari app lain) ===
+        String urlFromIntent = null;
+        if (intent != null) {
+            urlFromIntent = intent.getStringExtra("url");
+        }
+
+        // === Kalau service sudah jalan, tinggal load URL di tab 2 ===
+        if (root != null) {
+            if (!TextUtils.isEmpty(urlFromIntent)) {
+                loadUrlInBrowserTab(urlFromIntent);
+            }
+            return START_STICKY;
+        }
 
         try {
             wm = (WindowManager) getSystemService(WINDOW_SERVICE);
@@ -137,10 +150,18 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
-            // 2 tab default: Home + Browser
+            // === Buka 2 tab default ===
             addNewTabSilent(DEFAULT_URL);
-            addNewTabSilent(BLANK_URL);
-            switchTab(0);
+
+            if (!TextUtils.isEmpty(urlFromIntent)) {
+                // Kalau ada URL dari intent → buka di tab 2 + langsung aktifkan
+                addNewTabSilent(autofixUrl(urlFromIntent));
+                switchTab(1);
+            } else {
+                // Buka normal → tab 2 blank, aktifkan tab 1
+                addNewTabSilent(BLANK_URL);
+                switchTab(0);
+            }
 
         } catch (Throwable t) {
             Toast.makeText(this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
@@ -153,6 +174,48 @@ public class FloatService extends Service {
     public void onDestroy() {
         close();
         super.onDestroy();
+    }
+
+    /**
+     * Load URL ke tab browser (tab 2), lalu switch ke tab itu.
+     * Dipakai saat user klik link dari app lain ketika service sudah jalan.
+     */
+    private void loadUrlInBrowserTab(String url) {
+        if (tabs.size() < 2) return;
+
+        String fixed = autofixUrl(url);
+        Tab browserTab = tabs.get(1);
+        try {
+            browserTab.webView.loadUrl(fixed);
+            switchTab(1);
+            // Bawa window ke depan (kalau sedang minimize, expand dulu)
+            if (minimized) toggleBubble();
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Auto-fix URL: tambah http/https kalau belum ada.
+     */
+    private String autofixUrl(String url) {
+        if (url == null) return null;
+        url = url.trim();
+        if (url.isEmpty()) return null;
+
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            return url;
+        }
+
+        // Domain-ish: ada titik + gak ada spasi → https
+        if (url.contains(".") && !url.contains(" ")) {
+            return "https://" + url;
+        }
+
+        // Selain itu → search Google
+        try {
+            return SEARCH_ENGINE + URLEncoder.encode(url, "UTF-8");
+        } catch (Exception e) {
+            return SEARCH_ENGINE + url;
+        }
     }
 
     // ================== UI BUILD ==================
@@ -168,7 +231,7 @@ public class FloatService extends Service {
         bg.setStroke(dp(2), 0xFFFF9800);
         container.setBackground(bg);
 
-        // === HEADER dengan tab ===
+        // === HEADER ===
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -185,23 +248,19 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, 1f);
         header.addView(tabBar, tabLp);
 
-        // Tombol paste
         pasteBtn = makeBtn("📋", 0xFF00796B);
         header.addView(pasteBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
 
-        // Tombol minimize
         minBtn = makeBtn("−", 0xFF666666);
         LinearLayout.LayoutParams mLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         mLp.leftMargin = dp(4);
         header.addView(minBtn, mLp);
 
-        // Tombol D
         defaultBtn = makeBtn("D", 0xFFFF6600);
         LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         dLp.leftMargin = dp(4);
         header.addView(defaultBtn, dLp);
 
-        // Tombol X
         closeBtn = makeBtn("X", 0xFFCC3333);
         LinearLayout.LayoutParams xLp = new LinearLayout.LayoutParams(dp(34), dp(28));
         xLp.leftMargin = dp(4);
@@ -340,17 +399,15 @@ public class FloatService extends Service {
         return frameRoot;
     }
 
-    /** Load URL dari address bar */
     private void doSearch() {
         String input = addressBar.getText().toString();
-        String url = parseInput(input);
+        String url = autofixUrl(input);
         if (url != null) {
             Tab t = getActiveTab();
             if (t != null) t.webView.loadUrl(url);
         }
     }
 
-    /** Paste dari clipboard ke address bar + langsung load */
     private void pasteFromClipboard() {
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (cm == null) return;
@@ -362,7 +419,7 @@ public class FloatService extends Service {
                 addressBar.setText(pasted);
                 Tab t = getActiveTab();
                 if (t != null) {
-                    String url = parseInput(pasted);
+                    String url = autofixUrl(pasted);
                     if (url != null) t.webView.loadUrl(url);
                 }
                 Toast.makeText(this, "Pasted: " + pasted, Toast.LENGTH_SHORT).show();
@@ -499,28 +556,6 @@ public class FloatService extends Service {
     private void updateActiveTabVisibility() {
         for (int i = 0; i < tabs.size(); i++) {
             tabs.get(i).webView.setVisibility(i == activeTabIndex ? View.VISIBLE : View.GONE);
-        }
-    }
-
-    // ================== URL PARSER ==================
-
-    private String parseInput(String input) {
-        if (input == null) return null;
-        input = input.trim();
-        if (input.isEmpty()) return null;
-
-        if (input.startsWith("http://") || input.startsWith("https://")) {
-            return input;
-        }
-
-        if (input.contains(".") && !input.contains(" ")) {
-            return "https://" + input;
-        }
-
-        try {
-            return SEARCH_ENGINE + URLEncoder.encode(input, "UTF-8");
-        } catch (Exception e) {
-            return SEARCH_ENGINE + input;
         }
     }
 
