@@ -58,6 +58,7 @@ public class FloatService extends Service {
 
     // Header
     private LinearLayout tabBar;
+    private Button minBtn;
     private Button defaultBtn;
     private Button closeBtn;
 
@@ -188,9 +189,15 @@ public class FloatService extends Service {
                 LinearLayout.LayoutParams.MATCH_PARENT, 1f);
         header.addView(tabBar, tabLp);
 
+        // Tombol minimize
+        minBtn = makeBtn("−", 0xFF666666);
+        header.addView(minBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
+
         // Tombol D
         defaultBtn = makeBtn("D", 0xFFFF6600);
-        header.addView(defaultBtn, new LinearLayout.LayoutParams(dp(34), dp(28)));
+        LinearLayout.LayoutParams dLp = new LinearLayout.LayoutParams(dp(34), dp(28));
+        dLp.leftMargin = dp(4);
+        header.addView(defaultBtn, dLp);
 
         // Tombol X
         closeBtn = makeBtn("X", 0xFFCC3333);
@@ -336,6 +343,8 @@ public class FloatService extends Service {
                 addressBar.setText(DEFAULT_URL);
             }
         });
+
+        minBtn.setOnClickListener(v -> toggleBubble());
 
         closeBtn.setOnClickListener(v -> {
             close();
