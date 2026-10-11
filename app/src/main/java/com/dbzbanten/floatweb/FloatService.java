@@ -21,6 +21,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -37,13 +38,9 @@ import java.util.ArrayList;
 
 public class FloatService extends Service {
 
-    // === HOME tab — tidak bisa dirubah ===
     private static final String HOME_URL =
             "https://script.google.com/macros/s/AKfycbwUvjDgI4hQOYv8mp3B5BjutAf-hz_dd3-e7DxEjZJokb0hjDQnV4V-17BOfyiieFet/exec";
-
-    // === BROWSER tab — default google.com ===
     private static final String BROWSER_HOME = "https://www.google.com";
-
     private static final String SEARCH_ENGINE = "https://www.google.com/search?q=";
     private static final String PREFS_NAME = "dbzfloat_prefs";
     private static final String KEY_LAST_URL = "last_url";
@@ -129,7 +126,6 @@ public class FloatService extends Service {
             urlFromIntent = intent.getStringExtra("url");
         }
 
-        // Service sudah jalan → load ke tab browser
         if (root != null) {
             if (!TextUtils.isEmpty(urlFromIntent)) {
                 loadUrlInBrowserTab(urlFromIntent);
@@ -159,10 +155,8 @@ public class FloatService extends Service {
             oh = lp.height;
             wm.addView(root, lp);
 
-            // === Tab 1: Home (locked) ===
             addNewTabSilent(HOME_URL);
 
-            // === Tab 2: Browser (last url atau google.com) ===
             String lastUrl = loadSavedUrlFromPrefs();
             if (TextUtils.isEmpty(lastUrl)) {
                 addNewTabSilent(BROWSER_HOME);
@@ -170,7 +164,6 @@ public class FloatService extends Service {
                 addNewTabSilent(lastUrl);
             }
 
-            // Restore tab terakhir / handle intent
             if (!TextUtils.isEmpty(urlFromIntent)) {
                 tabs.get(TAB_BROWSER).webView.loadUrl(autofixUrl(urlFromIntent));
                 activeTabIndex = TAB_BROWSER;
@@ -185,7 +178,6 @@ public class FloatService extends Service {
             rebuildTabBar();
             updateActiveTabVisibility();
             updateAddressBarForTab();
-            updateAddressBarState();
 
         } catch (Throwable t) {
             Toast.makeText(this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
@@ -200,6 +192,37 @@ public class FloatService extends Service {
         super.onDestroy();
     }
 
+    // ================== KEYBOARD FOCUS HELPERS ==================
+
+    /**
+     * Lepas FLAG_NOT_FOCUSABLE supaya window bisa terima keyboard.
+     */
+    private void enableKeyboard() {
+        if (lp == null) return;
+        if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0) {
+            lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            try { wm.updateViewLayout(root, lp); } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Pasang FLAG_NOT_FOCUSABLE + sembunyikan keyboard.
+     * Dipakai supaya back button app lain berfungsi kembali.
+     */
+    private void disableKeyboard() {
+        if (lp == null) return;
+        if ((lp.flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0) {
+            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+            try { wm.updateViewLayout(root, lp); } catch (Throwable ignored) {}
+        }
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null && root != null) {
+                imm.hideSoftInputFromWindow(root.getWindowToken(), 0);
+            }
+        } catch (Throwable ignored) {}
+    }
+
     // ================== HELPERS ==================
 
     private String loadSavedUrlFromPrefs() {
@@ -208,7 +231,7 @@ public class FloatService extends Service {
         if (TextUtils.isEmpty(url)) return "";
         if (HOME_URL.equals(url)) return "";
         if (BLANK_URL.equals(url)) return "";
-        if (BROWSER_HOME.equals(url)) return ""; // default — anggap kosong
+        if (BROWSER_HOME.equals(url)) return "";
         return url;
     }
 
@@ -243,15 +266,12 @@ public class FloatService extends Service {
         }
     }
 
-    /** Tab 1 = Home tidak bisa diubah URL-nya */
     private boolean isHomeTabActive() {
         return activeTabIndex == TAB_HOME;
     }
 
-    /** Update address bar sesuai tab yang aktif */
     private void updateAddressBarForTab() {
         if (isHomeTabActive()) {
-            // Home tab — address bar locked
             addressBar.setText(HOME_URL);
             addressBar.setEnabled(false);
             addressBar.setAlpha(0.5f);
@@ -259,7 +279,6 @@ public class FloatService extends Service {
             loadBtn.setEnabled(false);
             loadBtn.setAlpha(0.5f);
         } else {
-            // Browser tab — normal
             Tab t = getActiveTab();
             addressBar.setEnabled(true);
             addressBar.setAlpha(1f);
@@ -275,11 +294,6 @@ public class FloatService extends Service {
                 }
             }
         }
-    }
-
-    /** Cek state address bar (dipanggil setelah switch tab) */
-    private void updateAddressBarState() {
-        updateAddressBarForTab();
     }
 
     // ================== UI BUILD ==================
@@ -421,37 +435,59 @@ public class FloatService extends Service {
         bubbleBtn.setOnTouchListener(new BubbleListener(this));
 
         // ===== LISTENERS =====
+
+        // Address bar — enable keyboard saat tap
+        addressBar.setOnTouchListener((v, e) -> {
+            if (e.getAction() == MotionEvent.ACTION_DOWN) {
+                enableKeyboard();
+            }
+            return false;
+        });
+        addressBar.setOnFocusChangeListener((v, hasFocus) -> {
+            if (!hasFocus) {
+                // Cek apakah WebView masih butuh keyboard
+                WebView wv = getActiveWebView();
+                if (wv == null || !wv.hasFocus()) {
+                    // Jangan langsung disable, biarkan user tap tombol lain
+                }
+            }
+        });
+
+        // Tombol header — disable keyboard saat tap
         reloadBtn.setOnClickListener(v -> {
+            disableKeyboard();
             stopAuto();
             Tab t = getActiveTab();
             if (t != null) t.webView.reload();
         });
 
-        addressBar.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO
-                    || actionId == EditorInfo.IME_ACTION_DONE) {
-                doLoad();
-                return true;
-            }
-            return false;
+        loadBtn.setOnClickListener(v -> {
+            doLoad();
+            disableKeyboard();
         });
 
-        loadBtn.setOnClickListener(v -> doLoad());
+        autoBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            showIntervalDialog();
+        });
 
-        FocusToggle toggle = new FocusToggle(this);
-        addressBar.setOnTouchListener(toggle);
-        addressBar.setOnFocusChangeListener(toggle);
+        pasteBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            pasteFromClipboard();
+        });
 
-        autoBtn.setOnClickListener(v -> showIntervalDialog());
+        defaultBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            resetBrowserTab();
+        });
 
-        pasteBtn.setOnClickListener(v -> pasteFromClipboard());
-
-        // Tombol D → Reset tab 2 ke google.com
-        defaultBtn.setOnClickListener(v -> resetBrowserTab());
-
-        minBtn.setOnClickListener(v -> toggleBubble());
+        minBtn.setOnClickListener(v -> {
+            disableKeyboard();
+            toggleBubble();
+        });
 
         closeBtn.setOnClickListener(v -> {
+            disableKeyboard();
             close();
             stopSelf();
         });
@@ -459,13 +495,17 @@ public class FloatService extends Service {
         return frameRoot;
     }
 
-    /** Load URL dari address bar — auto switch ke tab browser kalau di Home */
+    /** Ambil WebView dari tab yang aktif */
+    private WebView getActiveWebView() {
+        Tab t = getActiveTab();
+        return t != null ? t.webView : null;
+    }
+
     private void doLoad() {
         String input = addressBar.getText().toString();
         String url = autofixUrl(input);
         if (url == null) return;
 
-        // Kalau di Home tab → pindah ke tab browser dulu
         if (isHomeTabActive()) {
             switchTab(TAB_BROWSER);
         }
@@ -479,7 +519,6 @@ public class FloatService extends Service {
         }
     }
 
-    /** Paste dari clipboard — auto switch ke tab browser */
     private void pasteFromClipboard() {
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (cm == null) return;
@@ -489,7 +528,6 @@ public class FloatService extends Service {
             if (text != null && !TextUtils.isEmpty(text)) {
                 String pasted = text.toString();
 
-                // Kalau di Home → switch ke tab browser dulu
                 if (isHomeTabActive()) {
                     switchTab(TAB_BROWSER);
                 }
@@ -512,15 +550,9 @@ public class FloatService extends Service {
         Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show();
     }
 
-    /**
-     * Reset tab browser ke google.com + hapus URL tersimpan.
-     * Dipakai oleh tombol D.
-     */
     private void resetBrowserTab() {
-        // Hapus URL tersimpan
         Prefs.set(this, "");
 
-        // Kalau di Home → switch ke browser
         if (isHomeTabActive()) {
             switchTab(TAB_BROWSER);
         }
@@ -605,6 +637,23 @@ public class FloatService extends Service {
         wv.setBackgroundColor(0xFF000000);
         wv.setWebViewClient(new TabWebViewClient());
         wv.setWebChromeClient(new TabWebChromeClient());
+
+        // === KEYBOARD FIX: enable keyboard saat WebView di-tap ===
+        wv.setOnTouchListener((v, e) -> {
+            if (e.getAction() == MotionEvent.ACTION_DOWN) {
+                enableKeyboard();
+                // Request focus ke WebView
+                v.requestFocus();
+            }
+            return false; // biar WebView handle touch sendiri
+        });
+
+        wv.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                enableKeyboard();
+            }
+        });
+
         return wv;
     }
 
@@ -649,7 +698,10 @@ public class FloatService extends Service {
             lp.rightMargin = dp(3);
             tabBar.addView(btn, lp);
 
-            btn.setOnClickListener(v -> switchTab(idx));
+            btn.setOnClickListener(v -> {
+                disableKeyboard();
+                switchTab(idx);
+            });
         }
     }
 
@@ -703,7 +755,6 @@ public class FloatService extends Service {
             if (!TextUtils.isEmpty(url) && !BLANK_URL.equals(url)) {
                 found.url = url;
 
-                // Simpan URL hanya kalau BUKAN Home URL & BUKAN browser default
                 if (!HOME_URL.equals(url) && !BROWSER_HOME.equals(url)) {
                     Prefs.set(FloatService.this, url);
                 }
@@ -918,8 +969,7 @@ public class FloatService extends Service {
         public boolean onTouch(View v, MotionEvent e) {
             if (e.getAction() == MotionEvent.ACTION_DOWN) {
                 if (!v.isEnabled()) return true;
-                s.lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-                s.wm.updateViewLayout(s.root, s.lp);
+                s.enableKeyboard();
             }
             return false;
         }
@@ -927,8 +977,7 @@ public class FloatService extends Service {
         @Override
         public void onFocusChange(View v, boolean hasFocus) {
             if (!hasFocus) {
-                s.lp.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
-                s.wm.updateViewLayout(s.root, s.lp);
+                // Biarkan — nanti tombol lain akan disable
             }
         }
     }
